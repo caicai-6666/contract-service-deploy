@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+user.yaml
+.idea/
+*.iml
+.DS_Store
+# 前后端由独立仓库维护，不随部署仓库重复提交。
+/contract-service-be/
+/contract-service-fe/
+/backup/

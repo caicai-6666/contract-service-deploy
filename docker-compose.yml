@@ -1,0 +1,92 @@
+name: ${COMPOSE_PROJECT_NAME:-contract-service-deploy}
+
+services:
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      args:
+        ELASTICSEARCH_VERSION: ${ELASTICSEARCH_VERSION:-9.4.5}
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      bootstrap.memory_lock: "true"
+      ES_JAVA_OPTS: ${ELASTICSEARCH_JAVA_OPTS:--Xms1g -Xmx1g}
+    # ES 不发布宿主机端口，只允许 Compose 网络中的服务访问。
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [CMD-SHELL, "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 6s
+      retries: 30
+      start_period: 30s
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ${BACKEND_SOURCE:-./contract-service-be}
+      dockerfile: Dockerfile
+    # 供外部映射服务器访问；宿主机应仅放行可信代理来源。
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-17000}:20000"
+    env_file:
+      - .env
+    environment:
+      # 固定容器内部地址，避免复用本地 .env 后连接到容器自己的 localhost。
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      REVIEWER_USER_FILE: /workspace/data/user/users.yaml
+      CONTRACT_METADATA_DATABASE_FILE: /workspace/data/abstract/contracts.db
+      CONTRACT_CATEGORY_DEFINITION_DIR: /workspace/data/definition/contract-category
+      FIELD_DEFINITION_DIR: /workspace/data/definition/field
+      RETRIEVAL_VIEW_GUIDE_DIR: /workspace/data/definition/retrieval-view
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      # 整个 data 持久化；首次空卷由镜像填充，后续定义变更需显式更新卷。
+      - backend-data:/workspace/data
+      - type: bind
+        source: ./user.yaml
+        target: /workspace/data/user/users.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:20000/contract/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 20
+      start_period: 30s
+    init: true
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ${FRONTEND_SOURCE:-./contract-service-fe}
+      dockerfile: Dockerfile
+    environment:
+      BACKEND_UPSTREAM: backend:20000
+      CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-100m}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-17080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1/healthz]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+# Compose 项目名前缀隔离数据，不复用原开发 ES 卷。
+volumes:
+  elasticsearch-data:
+  backend-data:
