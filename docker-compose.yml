@@ -68,6 +68,9 @@ services:
       # 固定容器内部地址，避免复用本地 .env 后连接到容器自己的 localhost。
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
       NEO4J_URI: bolt://neo4j:7687
+      # 扩展随镜像提供，不读取宿主机原生库，也不受业务 data 卷覆盖。
+      SQLITE_LINDERA_EXTENSION_PATH: /opt/contract-service/extensions/liblindera_sqlite.so
+      LINDERA_CONFIG_PATH: /workspace/config/lindera-jieba.yml
       REVIEWER_USER_FILE: /workspace/data/user/users.yaml
       CONTRACT_METADATA_DATABASE_FILE: /workspace/data/abstract/contracts.db
       CONTRACT_CATEGORY_DEFINITION_DIR: /workspace/data/definition/contract-category

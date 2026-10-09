@@ -2,5 +2,3 @@
 users:
   - name: 管理员
     secret_key: REPLACE_WITH_A_RANDOM_SECRET
-    permission_level: 1
-# permission_level：1 新增/查看/删除；2 新增/查看；3 仅查看。

@@ -11,7 +11,7 @@ contract-service-deploy/
   docker-compose.yml
   .env.example                 可提交的完整环境模板
   .env                         本机配置与模型密钥，不提交
-  user.example.yaml            用户结构示例
+  user.yaml.example            用户结构示例
   user.yaml                    实际用户配置，不提交
   elasticsearch/Dockerfile     带 SmartCN 的 ES 镜像
   neo4j/Dockerfile             Neo4j Community 镜像
@@ -42,7 +42,7 @@ FRONTEND_SOURCE=../contract-service-fe
 
 ```bash
 cp .env.example .env
-cp user.example.yaml user.yaml
+cp user.yaml.example user.yaml
 chmod 600 .env user.yaml
 ```
 
@@ -62,6 +62,8 @@ curl --fail http://127.0.0.1:17080/contract/api/health
 映射服务器的上游设置为 `http://后端宿主机内网IP:BACKEND_PORT`，保留 `/contract/api/` 路径、Authorization 请求头和 SSE 流式响应，关闭响应缓冲并配置足够的读取超时。前端容器仍通过 `backend:20000` 访问后端，不受宿主机端口修改影响。变更端口后需重新创建后端容器，不能只执行 restart。
 
 宿主机防火墙或安全组应仅允许映射服务器访问后端端口。公网入口需增加 HTTPS、访问控制及上传容量限制，不应直接暴露后端明文 HTTP。ES 不发布宿主机端口，当前关闭认证，仅适用于受信任 Docker 主机与专用网络；本配置不是完整生产安全方案。
+
+后端镜像在构建时自动编译 Lindera 中文分词扩展，并验证中文 BM25 检索；无需在宿主机安装 Rust 或运行本地 scripts。原生扩展保存在 `/opt/contract-service/extensions/`，由 Compose 固定加载路径，不受 `/workspace/data` 卷覆盖。首次构建需要访问 Rust、Cargo 及词典下载源。
 
 模型服务在 Compose 外运行：容器内 `127.0.0.1` 指向容器自身。宿主机模型可使用 `host.docker.internal`，远程模型直接配置可达地址。Linux 已设置 host-gateway 映射，但模型仍需监听容器可达网卡并允许防火墙访问。模型健康不包含在后端 health 检查中，应额外通过真实合同任务验证。
 
@@ -99,7 +101,7 @@ docker compose down
 
 ## 顶层用户配置与更新
 
-`user.yaml` 的结构与后端原 `data/user/users.yaml` 一致，包含 `users` 列表，每项为 `name`、`secret_key`、`permission_level`。等级 1 可新增/查看/删除，2 可新增/查看，3 仅查看。
+`user.yaml` 的结构与后端原 `data/user/users.yaml` 一致，包含 `users` 列表，每项仅包含 `name` 和 `secret_key`。所有已登录用户均可执行共享合同的查看、新增、删除等操作；个人会话和运行任务仍按所有者隔离。
 
 挂载覆盖容器内配置视图，不会修改开发源码里的用户文件。缺少 `user.yaml` 时 Compose 报错，不创建同名目录。用户在启动期加载，不支持热更新；为兼容编辑器原子替换文件，修改后重新创建后端容器：
 
