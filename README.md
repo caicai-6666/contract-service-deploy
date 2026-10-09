@@ -1,6 +1,6 @@
 # 合同服务 Compose 部署
 
-本仓库统一构建和运行前端 Nginx、后端 FastAPI 与单节点 Elasticsearch。前后端源码仍由各自仓库维护；不包含 vLLM 模型服务，也不自动迁移原开发环境数据。
+本仓库统一构建和运行前端 Nginx、后端 FastAPI 、单节点 Elasticsearch 与 Neo4j Community。前后端源码仍由各自仓库维护；不包含 vLLM 模型服务，也不自动迁移原开发环境数据。
 
 ---
 
@@ -14,20 +14,21 @@ contract-service-deploy/
   user.example.yaml            用户结构示例
   user.yaml                    实际用户配置，不提交
   elasticsearch/Dockerfile     带 SmartCN 的 ES 镜像
+  neo4j/Dockerfile             Neo4j Community 镜像
   contract-service-be/         可选：独立克隆的后端仓库
   contract-service-fe/         可选：独立克隆的前端仓库
 ```
 
 示例配置按源码位于本目录下组织；将两个仓库克隆到对应目录即可。它们已被部署仓库忽略，不会重复提交。各仓库的版本需要自行记录和固定。
 
-当前本机 `.env` 已改为引用同级现有前后端，没有移动源码：
+若使用同级现有前后端，在 `.env` 中配置：
 
 ```dotenv
 BACKEND_SOURCE=../contract-service-be
 FRONTEND_SOURCE=../contract-service-fe
 ```
 
-`SOURCE` 相对于 Compose 文件。前后端使用各自项目根目录的 `Dockerfile` 和 `.dockerignore`，deploy 不再重复维护。前端 Nginx 模板也由前端项目维护，通过 `BACKEND_UPSTREAM=backend:20000` 接入后端。ES 没有独立业务源码项目，其镜像配置保留在 `elasticsearch/`。构建使用当前工作区内容，包括未提交修改；源码更新后须重新构建镜像。
+`SOURCE` 相对于 Compose 文件。前后端使用各自项目根目录的 `Dockerfile` 和 `.dockerignore`，deploy 不再重复维护。前端 Nginx 模板也由前端项目维护，通过 `BACKEND_UPSTREAM=backend:20000` 接入后端。ES 和 Neo4j 的镜像配置分别保留在 `elasticsearch/`、`neo4j/`。构建使用当前工作区内容，包括未提交修改；源码更新后须重新构建镜像。
 
 前端使用 `package-lock.json` 与 `npm ci`；后端沿用源码的 `requirements.txt` 版本范围。当前基础镜像使用版本标签，尚未锁定镜像 digest 和全部 Python 间接依赖；正式发布时应固定并记录验证过的镜像版本，避免把重新构建视为完全相同的产物。
 
@@ -45,7 +46,7 @@ cp user.example.yaml user.yaml
 chmod 600 .env user.yaml
 ```
 
-编辑源码路径、模型地址和密钥，并替换用户示例密钥。当前本机已从后端复制 `.env` 和用户配置；保留原用户权限，没有新增管理员。
+编辑源码路径、模型地址和密钥，并替换用户示例密钥。仅运行 Neo4j 时，只需配置 Neo4j 环境变量；完整部署前须另行补齐模型、源码和用户配置。
 
 ```bash
 docker compose config --quiet
@@ -72,9 +73,11 @@ curl --fail http://127.0.0.1:17080/contract/api/health
 | --- | --- | --- |
 | `backend-data` | `/workspace/data` | 整个 data：定义、PDF、SQLite（含 WAL/SHM）及其他数据子目录 |
 | `elasticsearch-data` | `/usr/share/elasticsearch/data` | ES 索引数据 |
+| `neo4j-data` | `/data` | 图数据库、认证数据及事务日志 |
+| `neo4j-logs` | `/logs` | Neo4j 运行日志 |
 | `./user.yaml`（只读） | `/workspace/data/user/users.yaml` | 顶层审核用户配置 |
 
-两个命名卷由 Docker 管理，实际名称以 `COMPOSE_PROJECT_NAME` 为前缀，并非 deploy 下的普通目录。后端整体持久化 `/workspace/data`，包括现有和未来新增的数据子目录。`user.yaml` 仍作为子路径只读挂载，覆盖容器中的用户配置视图；真实用户配置应单独备份，不会被写入数据卷。
+命名卷由 Docker 管理，实际名称以 `COMPOSE_PROJECT_NAME` 为前缀，并非 deploy 下的普通目录。后端整体持久化 `/workspace/data`，包括现有和未来新增的数据子目录。`user.yaml` 仍作为子路径只读挂载，覆盖容器中的用户配置视图；真实用户配置应单独备份，不会被写入数据卷。
 
 首次挂载空的命名卷时，Docker 默认将镜像内该目录的内容复制到卷中，因此初始 `data/definition` 来自镜像。已有非空卷不会随镜像重建自动刷新定义；更新类别、字段或检索指南时，须先备份、停写，再显式更新卷内对应定义并重建后端容器。不要为更新定义清空整个卷，也不要覆盖合同和数据库。参见 [Docker 卷初始化规则](https://docs.docker.com/engine/storage/volumes/#mounting-a-volume-over-existing-data)。镜像仍不包含真实用户、`.env`、历史合同、SQLite 或 Git 内容；整体挂载不代表自动复制开发环境的全部 data。
 
@@ -122,3 +125,35 @@ docker compose config --quiet
 启动卡在健康等待时先看 ES，再看后端配置和索引校验。SSE 若经过外层反向代理，该层也需关闭响应缓冲并配置足够超时。构建依赖下载失败属于网络或仓库问题，不能用已有服务健康代替新镜像验证。
 
 提交部署仓库时只提交环境及用户模板、Compose、ES Dockerfile 和本文档；前后端 Dockerfile 分别随各自项目提交。不要提交 `.env`、`user.yaml`、源码副本或备份。不要将 `docker compose config` 完整输出粘贴到工单：它会展开模型密钥。检查语法使用 `--quiet`。
+
+
+---
+
+## Neo4j 部署与本地开发
+
+Neo4j 与 ES 一样由主 Compose 编排，镜像构建入口为 `neo4j/Dockerfile`。默认版本固定为 `5.26.30-community`，可通过 `NEO4J_VERSION` 调整。主配置发布图数据库端口，默认仅绑定宿主机回环地址；Compose 内服务使用 `bolt://neo4j:7687`。后端已接入共享异步客户端、合同节点入库/删除同步和启动恢复，并等待 Neo4j 健康；关系创建、独立删除及一跳查询接口已实现。
+
+与 ES 一致关闭认证：`NEO4J_AUTH: "none"`，无需配置用户名和密码。宿主机映射由 `NEO4J_BIND_ADDRESS`（默认 `127.0.0.1`）、`NEO4J_HTTP_PORT`（默认 `7474`）和 `NEO4J_BOLT_PORT`（默认 `7687`）控制，在 `.env` 中配置。数据库绑定地址独立于前后端的 `BIND_ADDRESS`，不会随前后端地址改变。
+
+仅启动 Neo4j：
+
+```bash
+docker compose config --quiet
+docker compose up -d --build --wait neo4j
+```
+
+宿主机开发和整套容器部署共用主 Compose，无需额外覆盖文件。按默认配置，浏览器访问 `http://127.0.0.1:7474`，本机后端连接 `bolt://127.0.0.1:7687`，认证方式选择 No authentication。容器后端仍连接 `bolt://neo4j:7687`，不受宿主机映射端口变化影响。
+
+上述命令只选择 `neo4j`，不会启动或重建 ES、前后端。修改监听地址或端口后，重新执行 `docker compose up -d neo4j` 应用配置；无需删除数据卷。
+
+默认堆初始 256 MiB、最大 512 MiB、页面缓存 256 MiB，容器内存上限 2 GiB；这是小型开发环境的起点，非生产容量结论。对应配置为 `NEO4J_HEAP_INITIAL_SIZE`、`NEO4J_HEAP_MAX_SIZE`、`NEO4J_PAGECACHE_SIZE`、`NEO4J_MEMORY_LIMIT`，堆和页面缓存之外需保留原生内存余量。
+
+健康检查通过无认证 Bolt `RETURN 1` 验证数据库，每 30 秒检查一次。排查与停启：
+
+```bash
+docker compose logs --tail=100 neo4j
+docker compose stop neo4j
+docker compose start neo4j
+```
+
+命名卷随 Compose 项目名隔离；停止、重建容器保留数据。禁止为普通停启使用 `down --volumes`。图关系投入使用后需将 Neo4j 纳入备份，Community 可停库后使用 `neo4j-admin database dump`；备份与 SQLite/PDF 的一致性策略仍需完善。后端启动会为真实的历史合同补建节点，不创建示例节点和关系。
