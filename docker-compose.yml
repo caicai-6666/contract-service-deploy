@@ -73,6 +73,10 @@ services:
       LINDERA_CONFIG_PATH: /workspace/config/lindera-jieba.yml
       REVIEWER_USER_FILE: /workspace/data/user/users.yaml
       CONTRACT_METADATA_DATABASE_FILE: /workspace/data/abstract/contracts.db
+      COMMUNICATION_DATABASE_FILE: /workspace/data/communication/communication.db
+      # 审核区与正式合同分开存储，但一起纳入 backend-data 卷持久化。
+      INGESTION_REVIEW_DIRECTORY: /workspace/data/ingestion-review
+      DELETION_REVIEW_DIRECTORY: /workspace/data/deletion-review
       CONTRACT_CATEGORY_DEFINITION_DIR: /workspace/data/definition/contract-category
       FIELD_DEFINITION_DIR: /workspace/data/definition/field
       RETRIEVAL_VIEW_GUIDE_DIR: /workspace/data/definition/retrieval-view
