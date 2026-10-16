@@ -199,17 +199,24 @@ MIDDLEWARE_SECRET=replace-with-platform-secret
 | 登录与心跳 | `MIDDLEWARE_RETRY_INTERVAL_SECONDS` / `MIDDLEWARE_REQUEST_TIMEOUT_SECONDS` | 失败间隔30秒，单次请求总超时10秒。正常心跳采用服务端建议。 |
 | 入库送审 | `INGESTION_REVIEW_SCAN_INTERVAL_SECONDS` / `INGESTION_REVIEW_PUBLISH_RETRY_SECONDS` / `INGESTION_REVIEW_PUBLISH_TIMEOUT_SECONDS` / `INGESTION_REVIEW_PUBLISH_BATCH_SIZE` | 扫描30秒，重试等待60秒，上传超时120秒，每轮最多10条。 |
 | 入库审核结果 | `INGESTION_REVIEW_RESULT_POLL_INTERVAL_SECONDS` / `INGESTION_REVIEW_RESULT_BATCH_SIZE` | 轮询30秒，每轮最多10条；批准后正式入库，处理成功再 ack。 |
-| 删除送审 | `DELETION_REVIEW_PUBLISH_SCAN_INTERVAL_SECONDS` / `DELETION_REVIEW_PUBLISH_RETRY_SECONDS` / `DELETION_REVIEW_PUBLISH_TIMEOUT_SECONDS` / `DELETION_REVIEW_PUBLISH_BATCH_SIZE` | 扫描30秒，重试等待60秒，上传超时120秒，每轮最多10条。 |
+| 删除送审 | `DELETION_REVIEW_PUBLISH_SCAN_INTERVAL_SECONDS` / `DELETION_REVIEW_PUBLISH_RETRY_SECONDS` / `DELETION_REVIEW_PUBLISH_TIMEOUT_SECONDS` / `DELETION_REVIEW_PUBLISH_BATCH_SIZE` | 扫描30秒，重试等待60秒，请求超时120秒，每轮最多10条，不上传文件。 |
+| 删除审核反馈 | `DELETION_REVIEW_RESULT_POLL_INTERVAL_SECONDS` / `DELETION_REVIEW_RESULT_BATCH_SIZE` | 每轮等待30秒，最多处理10条；实际删除或拒绝恢复完成后 ack。 |
 | 批准后正式删除 | `DELETION_REVIEW_SCAN_INTERVAL_SECONDS` / `DELETION_REVIEW_RETRY_SECONDS` / `DELETION_REVIEW_BATCH_SIZE` | 扫描30秒，失败等待60秒，每轮最多10条；仅处理已批准申请。 |
 | 审核区清理 | `INGESTION_REVIEW_*` / `DELETION_REVIEW_*` 的 `RETENTION_SECONDS`、`CLEANUP_INTERVAL_SECONDS`、`CLEANUP_BATCH_SIZE` | 本地处理完成后保留604800秒（7天），每3600秒清理，批次上限100。未处理完成申请不按提交时间清除。 |
 
-前端确认入库先保存待审快照；审核通过后才写正式 SQLite、PDF、ES 和 Neo4j。删除申请先锁定 `can_delete` 并保存备注，再后台送审；审批通过才执行正式删除，拒绝则恢复可申请状态。删除审核反馈拉取和 ack 尚未接入，本配置不宣称删除审核全链路已经自动闭环。具体接口由对应后端版本的 API 文档定义。
+前端确认入库先保存待审快照；审核通过后才写正式 SQLite、PDF、ES 和 Neo4j。删除申请先锁定 `can_delete` 并保存备注，再以 URL 编码表单提交七个业务字段，不提交 file 或 file_extension；审批通过才执行正式删除，拒绝则恢复可申请状态。删除审核反馈通过 `/middleware-service/api/deletion-results/pull` 拉取，完成正式删除或拒绝恢复后再 ack，失败和重复投递按本地状态重试。具体接口由对应后端版本的 API 文档定义。
+
+审核历史保留期与再次申请资格分离：正式删除成功后，同一 PDF 重新入库可立即再次申请删除，生成新的申请 ID，无需等待旧审核记录清理；待审、删除中或失败的申请仍阻止重复提交。升级后后端初始化会自动更新删除审核库的部分唯一索引，保留旧审核记录与备注；旧成功反馈重放不会删除新入库实例。
+
+中间件的 passport 为字符串数组；一份合同可关联多个通行证。后端将完整数组存入正式库及审核区，删除送审通过重复 passport 表单字段发送；旧单值存储在重启初始化时迁移，升级前需停写并成套备份三个 SQLite。入库详情 review.passport 和删除详情 passport 均返回数组，未绑定仍为 null。
 
 入库确认和删除申请都要求前端提交申请人 `note`。目前入库审核记录允许所有已登录用户查询，删除审核记录按申请人或原合同上传人过滤；前端应与所部署后端的请求体和查询契约同步。
 
 发送以原 `document_id` 作为 source_id；中间件在各申请流内按平台编码和 source_id 去重。明确暂时失败及发布结果不确定均延迟重试，合法409重复响应关联原 message_id；403、422、本地文件损坏或缺少通行证等进入 blocked，不自动重试。更新配置不会自动解除已有 blocked 记录。审核区 SQLite、正式 PDF 和远端消息不是跨系统原子事务，部署升级及备份须保持这些数据的一致性。
 
-修改 `.env` 后使用 `docker compose up -d --force-recreate backend frontend` 应用环境变量；只执行 restart 不会更新配置。入库反馈接口使用 `/middleware-service/api/ingestion-results/`；中间件需支持当前带 source_id 的 multipart 送审和去重契约。
+更新源码或拉取 `.env.example` 不会自动合并已有私有 `.env`；部署升级时应补齐新增键并保留原地址、密钥和自定义值。审核轮询、重试和清理配置通过 Compose 的 `backend.env_file: .env` 注入，无需逐项复制到 `environment`；两个审核目录固定在 backend-data 持久卷内。
+
+修改 `.env` 后使用 `docker compose up -d --force-recreate backend frontend` 应用环境变量；只执行 restart 不会更新配置。入库反馈 pull/ack 使用 `/middleware-service/api/ingestion-results/`，删除反馈 pull/ack 使用 `/middleware-service/api/deletion-results/`；中间件需支持当前带 source_id 的送审和去重契约：入库仍为含 PDF 的 multipart，删除为无附件的 URL 编码表单。
 
 ---
 
@@ -252,7 +259,7 @@ docker compose config --quiet
 | 后端没有启动完成 | ES/Neo4j 健康、用户和业务定义、Lindera 扩展、索引 mapping 及启动对账日志。 |
 | health 成功但提取/问答失败 | 模型地址与名称、`/tokenize`、Embedding 维度、生成预算及工具解析。health 只表示 API 存活。 |
 | 申请一直待发送 | 中间件地址、平台身份和消息权限；确认已有有效平台会话。 |
-| 申请显示发送受阻 | 检查是否403/422，或本地缺少 passport、文件损坏、身份不匹配；blocked 不会自动重试。 |
+| 申请显示发送受阻 | 检查是否403/422，或本地缺少 passport、身份不匹配；入库送审还需检查文件；blocked 不会自动重试。 |
 | 修改 `.env` 后没有生效 | 重新创建受影响容器，而非只 restart；固定的数据库地址和路径仍由 Compose environment 覆盖。 |
 | 前端没有收到即时输出 | 外层代理的 SSE 缓冲、读取超时和后端事件日志。 |
 
