@@ -71,7 +71,6 @@ services:
       # 扩展随镜像提供，不读取宿主机原生库，也不受业务 data 卷覆盖。
       SQLITE_LINDERA_EXTENSION_PATH: /opt/contract-service/extensions/liblindera_sqlite.so
       LINDERA_CONFIG_PATH: /workspace/config/lindera-jieba.yml
-      REVIEWER_USER_FILE: /workspace/data/user/users.yaml
       CONTRACT_METADATA_DATABASE_FILE: /workspace/data/abstract/contracts.db
       COMMUNICATION_DATABASE_FILE: /workspace/data/communication/communication.db
       # 审核区与正式合同分开存储，但一起纳入 backend-data 卷持久化。
@@ -85,19 +84,13 @@ services:
     volumes:
       # 整个 data 持久化；首次空卷由镜像填充，后续定义变更需显式更新卷。
       - backend-data:/workspace/data
-      - type: bind
-        source: ./user.yaml
-        target: /workspace/data/user/users.yaml
-        read_only: true
-        bind:
-          create_host_path: false
     depends_on:
       neo4j:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
     healthcheck:
-      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:20000/contract/api/health', timeout=5)"]
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:20000/knowledge-accumulation/contract/api/health', timeout=5)"]
       interval: 15s
       timeout: 6s
       retries: 20

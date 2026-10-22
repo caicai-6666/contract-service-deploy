@@ -1,4 +1,0 @@
-# 复制为 user.yaml 后务必替换示例密钥。用户名称和密钥均不能重复。
-users:
-  - name: 管理员
-    secret_key: REPLACE_WITH_A_RANDOM_SECRET
