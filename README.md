@@ -1,5 +1,7 @@
 # 现象合同智能管理平台 · 部署
 
+本机 IDE 开发使用 [docker-compose.dev.yml](docker-compose.dev.yml)，只启动合同部署独立的 Elasticsearch/SmartCN 和 Neo4j，向宿主机发布回环端口。环境准备及统一管理命令见[本机开发基础设施](../dev-infra/README.md)。
+
 本仓库统一构建和运行前端 Nginx、后端 FastAPI、单节点 Elasticsearch 与 Neo4j Community。前后端源码仍由各自仓库维护；不包含 vLLM、中间件或 DeepSeek 服务，也不自动迁移原开发环境数据。本文配置对应 `main` 的多平台审核流程；独立应用部署使用各仓库相匹配的 `local-deploy` 分支，不混用两套流程。
 
 ## 阅读入口
@@ -111,14 +113,16 @@ curl --fail http://127.0.0.1:17080/knowledge-accumulation/contract/api/health
 
 | 入口 | 宿主机地址 | 容器内地址 |
 | --- | --- | --- |
-| 前端网页 | `http://127.0.0.1:17080/contract/` | `frontend:80` |
+| 前端网页 | `http://127.0.0.1:17080/knowledge-accumulation/contract/` | `frontend:80` |
 | 同源业务 API | `http://127.0.0.1:17080/knowledge-accumulation/contract/api/` | Nginx 转发至 `backend:20000`。 |
 | 后端 API | `http://127.0.0.1:17000/knowledge-accumulation/contract/api/` | `backend:20000` |
 | Swagger / OpenAPI | `http://127.0.0.1:17000/knowledge-accumulation/docs` / `/knowledge-accumulation/openapi.json` | 后端提供，统一置于 `/knowledge-accumulation` 下。 |
 | Neo4j Browser / Bolt | `http://127.0.0.1:7474` / `bolt://127.0.0.1:7687` | `neo4j:7474` / `neo4j:7687` |
 | Elasticsearch | 不发布宿主机端口。 | `http://elasticsearch:9200` |
 
-前端构建固定使用 `/contract/`；同源 API 使用 `/knowledge-accumulation/contract/api/`，支持 History 路由刷新、PDF.js 静态资源及不缓冲的 SSE。上传上限默认为 100 MB，可在 `.env` 设置 `CLIENT_MAX_BODY_SIZE`，重新创建前端容器后生效。
+前端构建固定使用 `/knowledge-accumulation/contract/`；同源 API 使用 `/knowledge-accumulation/contract/api/`，支持 History 路由刷新、PDF.js 静态资源及不缓冲的 SSE。上传上限默认为 100 MB，可在 `.env` 设置 `CLIENT_MAX_BODY_SIZE`；图片和图标默认缓存 30 天，可通过非负整数 `ICON_CACHE_MAX_AGE=2592000` 调整缓存秒数。重新创建前端容器后生效。
+
+统一入口与本平台需使用相同协议、域名和端口，以共享 `localStorage.access_token`；外层网关同时转发 `/knowledge-accumulation/` 入口与本平台子路径。后端通过 ASGI 部署时不设置开发入口专用的 `APP_PATH_PREFIX=/dev`。
 
 后端应用路径已统一增加 `/knowledge-accumulation`。前端的 API 基础地址与 Nginx location 必须同步使用上述新路径，并原样转发至后端；仍只代理 `/contract/api/` 的旧前端镜像需要同步更新后重新构建。Compose 的后端健康检查已使用新地址。
 
@@ -140,7 +144,7 @@ curl --fail http://127.0.0.1:17080/knowledge-accumulation/contract/api/health
 
 | 卷 / 挂载 | 容器位置 | 用途 |
 | --- | --- | --- |
-| `backend-data` | `/workspace/data` | 整个 data：定义、PDF、SQLite（含 WAL/SHM）及其他数据子目录 |
+| `backend-data` | `/workspace/data` | 整个运行 data：PDF、SQLite（含 WAL/SHM）及其他数据子目录 |
 | `elasticsearch-data` | `/usr/share/elasticsearch/data` | ES 索引数据 |
 | `neo4j-data` | `/data` | 图数据库、认证数据及事务日志 |
 | `neo4j-logs` | `/logs` | Neo4j 运行日志 |
@@ -159,7 +163,7 @@ curl --fail http://127.0.0.1:17080/knowledge-accumulation/contract/api/health
 
 后端 Dockerfile 已创建审核目录，应用启动时初始化 SQLite。删除审核记录引用正式 PDF，审核批准前不删除原合同。审核数据与正式数据分别管理，均随 `backend-data` 保留。
 
-首次挂载空的命名卷时，Docker 默认将镜像内该目录的内容复制到卷中，因此初始 `data/definition` 来自镜像。已有非空卷不会随镜像重建自动刷新定义；更新类别、字段或检索指南时，须先备份、停写，再显式更新卷内对应定义并重建后端容器。不要为更新定义清空整个卷，也不要覆盖合同和数据库。参见 [Docker 卷初始化规则](https://docs.docker.com/engine/storage/volumes/#mounting-a-volume-over-existing-data)。镜像仍不包含真实用户、`.env`、历史合同、SQLite 或 Git 内容；整体挂载不代表自动复制开发环境的全部 data。
+合同类别、Core 字段和检索指南随镜像位于 `/workspace/assets/definition/`，工具格式位于 `/workspace/assets/tool-tag/`，均不进入 `backend-data`。Compose 固定三个定义目录为镜像内路径；更新静态资源后重新构建并创建后端容器即可生效，无需修改数据卷。旧卷中的 `data/definition` 不再读取；若曾直接修改卷内定义，升级前须将需要保留的内容核对并同步至后端源码的 `assets/definition/` 后构建。不要为更新定义清空数据卷。镜像不包含真实用户、`.env`、历史合同、SQLite 或 Git 内容；整体挂载不代表自动复制开发环境的全部 data。
 
 旧方案的 `backend-contracts`、`backend-abstract` 卷不会自动合并到 `backend-data`。若曾使用旧方案入库，应先停写并备份，再迁移 PDF 和完整 SQLite 数据至新卷对应子目录；迁移需单独执行，修改配置不会自动合并或删除旧卷。
 
@@ -221,11 +225,26 @@ MIDDLEWARE_SECRET=replace-with-platform-secret
 
 ## 模型与工具配置
 
-`.env.example` 已包含主模型、合同提取和会话门禁独立的推理强度、tool-tag 注入开关、思考 FIFO、页面保留轮数、中途反馈提醒，以及文件、通行证、网页搜索和网页内容池配置。配置值需与所部署模型能力及上下文窗口对应；模型、工具协议文件名和 API 地址不从本地开发 `.env` 自动复制。
+`.env.example` 已包含主模型、合同提取和会话门禁独立的推理强度、tool-tag 注入开关、页面保留轮数、中途反馈提醒，以及文件、通行证、网页搜索、网页内容和图片配置。网页图片默认最多 6 个候选、保留 3 张，单图下载及标准化上限为 4194304 字节，分别由 `COMMUNICATION_WEB_IMAGE_MAX_CANDIDATES`、`COMMUNICATION_WEB_IMAGE_MAX_SELECTED` 和 `COMMUNICATION_WEB_IMAGE_MAX_BYTES` 控制。配置值需与所部署模型能力及上下文窗口对应；模型、工具协议文件名和 API 地址不从本地开发 `.env` 自动复制。
+
+独立思考 FIFO 及 `VLLM_MLLM_REASONING_WINDOW_ROUNDS` 已移除，旧 `.env` 中的同名键应删除。已接受消息的完整原生思考随任务备份和恢复，旧库在初始化时事务迁移可定位的旧思考条目；升级前备份会话 SQLite，迁移失败会回滚，已被旧 FIFO 驱逐的内容无法恢复。思考仍计入完整上下文预算，不向用户 SSE 或公开历史披露。
 
 `VLLM_MLLM_TOOL_TAG_ENABLED=false` 时不在消息上下文注入工具格式及相关纠错说明，模型部署侧仍须配置合适的工具解析和模板。Lindera 扩展路径由 Compose 固定为 `/opt/contract-service/extensions/liblindera_sqlite.so`，不能使用 macOS 原生库。私有执行链路调试默认 `COMMUNICATION_TRACE_ENABLED=false`，仅开发环境使用。
 
 Embedding 文本与图像分别使用后端源码中的统一指令，由 `app/core/embedding_prompt.py` 维护，不新增环境变量。全新部署直接使用当前指令；已有数据升级时需成套备份并重算受影响的文档向量，保证查询与存储侧编码一致，包括 SQLite 中的合同摘要、注意事项、会话检索投影，ES 中的问题与页面融合向量，以及 Neo4j 中的关系描述向量。应用启动和镜像重建不会自动完成重算；本机开发环境使用的新索引名称也不会自动同步到其他部署。具体版本与迁移边界见对应后端的 `description/capability/infrastructure/embedding-instruction-selection.md`，不要仅切换查询侧指令后继续使用旧向量。
+
+### A2A 子平台
+
+默认 `A2A_ENABLED=false`，启用前需在中间件登记本平台为支持 A2A 的子管理平台，并配置现有 `MIDDLEWARE_BASE_URL`、`MIDDLEWARE_PLATFORM_CODE` 和 `MIDDLEWARE_SECRET`。后端主动领取和回复任务，不新增公开端口，不直接连接 RabbitMQ；中间件须支持当前 `platform-a2a/requests/pull`、`platform-a2a/replies/publish` 及 `user/file-permission` 契约。
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `A2A_CONTEXT_TTL_SECONDS` | `1800` | 内存响应检查点存活秒数。 |
+| `A2A_CONTEXT_CAPACITY` | `100` | 内存响应检查点数量上限。 |
+| `A2A_RECEIPT_CAPACITY` | `1000` | 任务幂等结果及私有审计数量上限。 |
+| `A2A_POLL_INTERVAL_SECONDS` | `2` | 后台轮询及续租周期秒数，须小于中间件任务租约。 |
+
+A2A 复用单 worker 的模型额度和正式合同资源，按用户本平台文件等级过滤读取范围。响应链、回执和审计只驻留内存，不接入 Communication 归档；后端重启会清空它们，调用方需重新建立响应链。配置通过 `backend.env_file` 注入，修改后重新创建后端容器；协议和权限边界见后端 `description/architecture/workflow/contract-communication/a2a-runtime.md`。
 
 ---
 

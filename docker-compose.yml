@@ -76,13 +76,14 @@ services:
       # 审核区与正式合同分开存储，但一起纳入 backend-data 卷持久化。
       INGESTION_REVIEW_DIRECTORY: /workspace/data/ingestion-review
       DELETION_REVIEW_DIRECTORY: /workspace/data/deletion-review
-      CONTRACT_CATEGORY_DEFINITION_DIR: /workspace/data/definition/contract-category
-      FIELD_DEFINITION_DIR: /workspace/data/definition/field
-      RETRIEVAL_VIEW_GUIDE_DIR: /workspace/data/definition/retrieval-view
+      # 权威定义随镜像更新，不放入持久数据卷，避免旧卷遮蔽新版资源。
+      CONTRACT_CATEGORY_DEFINITION_DIR: /workspace/assets/definition/contract-category
+      FIELD_DEFINITION_DIR: /workspace/assets/definition/field
+      RETRIEVAL_VIEW_GUIDE_DIR: /workspace/assets/definition/retrieval-view
     extra_hosts:
       - host.docker.internal:host-gateway
     volumes:
-      # 整个 data 持久化；首次空卷由镜像填充，后续定义变更需显式更新卷。
+      # 整个运行 data 持久化；静态定义和工具协议由镜像中的 assets 提供。
       - backend-data:/workspace/data
     depends_on:
       neo4j:
@@ -105,6 +106,7 @@ services:
     environment:
       BACKEND_UPSTREAM: backend:20000
       CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE:-100m}
+      ICON_CACHE_MAX_AGE: ${ICON_CACHE_MAX_AGE:-2592000}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-17080}:80"
     depends_on:

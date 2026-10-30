@@ -1,0 +1,64 @@
+name: phenosolar-contract-dev
+
+# 合同部署独立维护 ES 和 Neo4j，不接入知识部署的 MySQL 网络或数据卷。
+services:
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+      args:
+        ELASTICSEARCH_VERSION: ${ELASTICSEARCH_VERSION:-9.4.5}
+    image: phenosolar-dev-elasticsearch:${ELASTICSEARCH_VERSION:-9.4.5}
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      bootstrap.memory_lock: "true"
+      ES_JAVA_OPTS: -Xms1g -Xmx1g
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [CMD-SHELL, "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 6s
+      retries: 30
+      start_period: 45s
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 2g
+    restart: unless-stopped
+
+  neo4j:
+    build:
+      context: ./neo4j
+      args:
+        NEO4J_VERSION: ${NEO4J_VERSION:-5.26.30-community}
+    image: phenosolar-dev-neo4j:${NEO4J_VERSION:-5.26.30-community}
+    environment:
+      NEO4J_AUTH: "none"
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    healthcheck:
+      test: [CMD-SHELL, 'cypher-shell -a bolt://localhost:7687 -d neo4j "RETURN 1;" >/dev/null 2>&1']
+      interval: 15s
+      timeout: 15s
+      retries: 20
+      start_period: 60s
+    mem_limit: 1536m
+    stop_grace_period: 1m
+    restart: unless-stopped
+
+volumes:
+  elasticsearch-data:
+  neo4j-data:
+  neo4j-logs:
