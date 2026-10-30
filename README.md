@@ -195,11 +195,11 @@ MIDDLEWARE_SECRET=replace-with-platform-secret
 
 这是宿主机中间件的地址示例；跨机器部署时换成容器可达的实际 HTTP/HTTPS 地址。`127.0.0.1` 在容器内指向后端自身；`host.docker.internal` 不会让仅监听宿主机回环地址的服务自动变为可达，需调整中间件监听与网络规则。中间件独立部署，本 Compose 不启动 RabbitMQ 或中间件，也不把中间件健康作为后端启动依赖。
 
-后端后台登录取得令牌，按返回间隔心跳；失败按 `MIDDLEWARE_RETRY_INTERVAL_SECONDS` 重试，不阻塞应用启动。三项缺失时不登录，受保护接口返回503；已存在的本地审核申请保留，不能完成新的外部送审；后端 `/health` 成功不代表中间件已连接。同一 platform_code 只能保持一个活跃会话，部署后端单 worker，避免开发进程与容器同时使用同一平台凭证。
+后端后台登录取得令牌，平台 TTL 与心跳间隔均采用每次中间件响应，无需在 deploy 配置同样数值。取得服务端周期后的普通失败按该周期与本地兜底的较小值重试；平台 401 撤销当前令牌并及时唤醒重登。只有尚未取得周期或登录凭证被拒绝时，才按 `MIDDLEWARE_RETRY_INTERVAL_SECONDS` 兜底。连接故障不阻塞应用启动，但三项缺失或平台连接未就绪时受保护接口返回503；已有本地审核申请保留。后端 health 成功不代表中间件已连接。同一 platform_code 只能保持一个活跃会话，部署后端单 worker，避免开发进程与容器同时使用同一平台凭证。
 
 | 环节 | 配置项 | 默认值及行为 |
 | --- | --- | --- |
-| 登录与心跳 | `MIDDLEWARE_RETRY_INTERVAL_SECONDS` / `MIDDLEWARE_REQUEST_TIMEOUT_SECONDS` | 失败间隔30秒，单次请求总超时10秒。正常心跳采用服务端建议。 |
+| 登录与心跳 | `MIDDLEWARE_RETRY_INTERVAL_SECONDS` / `MIDDLEWARE_REQUEST_TIMEOUT_SECONDS` | 未获服务端参数或凭证被拒绝时兜底30秒，单次请求总超时10秒；TTL、心跳及已知周期后的普通重试采用服务端返回值。 |
 | 入库送审 | `INGESTION_REVIEW_SCAN_INTERVAL_SECONDS` / `INGESTION_REVIEW_PUBLISH_RETRY_SECONDS` / `INGESTION_REVIEW_PUBLISH_TIMEOUT_SECONDS` / `INGESTION_REVIEW_PUBLISH_BATCH_SIZE` | 扫描30秒，重试等待60秒，上传超时120秒，每轮最多10条。 |
 | 入库审核结果 | `INGESTION_REVIEW_RESULT_POLL_INTERVAL_SECONDS` / `INGESTION_REVIEW_RESULT_BATCH_SIZE` | 轮询30秒，每轮最多10条；批准后正式入库，处理成功再 ack。 |
 | 删除送审 | `DELETION_REVIEW_PUBLISH_SCAN_INTERVAL_SECONDS` / `DELETION_REVIEW_PUBLISH_RETRY_SECONDS` / `DELETION_REVIEW_PUBLISH_TIMEOUT_SECONDS` / `DELETION_REVIEW_PUBLISH_BATCH_SIZE` | 扫描30秒，重试等待60秒，请求超时120秒，每轮最多10条，不上传文件。 |
