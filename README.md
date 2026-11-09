@@ -70,6 +70,8 @@ FRONTEND_SOURCE=../contract-service-fe
 
 前端的 `vite.config.js` 引用 `config/developmentCompression.js`，构建上下文必须包含已提交的 `config/` 和匹配的依赖锁文件；前端 Dockerfile 已负责复制及安装。开发依赖 `compression` 只用于 Vite 开发服务器，运行镜像仍只包含 Nginx 和完整静态产物；无需在 Compose 新增压缩变量、Node 服务或缓存卷。开发预打包目录 `cache/` 不进入镜像。页面按首次访问加载，发布时必须一起更新 HTML、全部 `assets/` 分包和 `pdfjs/` 资源。
 
+生产资源压缩由前端镜像内的 Nginx 提供：至少 1 KiB 的文本资源和 WASM 按客户端协商使用 gzip，API/SSE 不由本层压缩，现有资源缓存期限不变。生产未启用 Brotli。外层代理须保留 `Accept-Encoding`、`Content-Encoding`、`Vary` 和缓存响应头；配置与验证细节由前端源码的 `description/platform/docker.md` 维护。更新压缩配置需重新构建并创建前端容器，不新增部署环境变量。
+
 ---
 
 ## 首次启动
