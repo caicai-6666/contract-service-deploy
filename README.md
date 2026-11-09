@@ -14,6 +14,7 @@
 - [中间件与合同审核](#中间件与合同审核)
 - [模型与工具配置](#模型与工具配置)
 - [用户认证与更新](#用户认证与更新)
+- [前端更新与回滚](#前端更新与回滚)
 - [排查与提交](#排查与提交)
 - [Neo4j 部署与本地开发](#neo4j-部署与本地开发)
 
@@ -67,6 +68,8 @@ FRONTEND_SOURCE=../contract-service-fe
 
 前端使用 `package-lock.json` 与 `npm ci`；后端沿用源码的 `requirements.txt` 版本范围。当前基础镜像使用版本标签，尚未锁定镜像 digest 和全部 Python 间接依赖；正式发布时应固定并记录验证过的镜像版本，避免把重新构建视为完全相同的产物。
 
+前端的 `vite.config.js` 引用 `config/developmentCompression.js`，构建上下文必须包含已提交的 `config/` 和匹配的依赖锁文件；前端 Dockerfile 已负责复制及安装。开发依赖 `compression` 只用于 Vite 开发服务器，运行镜像仍只包含 Nginx 和完整静态产物；无需在 Compose 新增压缩变量、Node 服务或缓存卷。开发预打包目录 `cache/` 不进入镜像。页面按首次访问加载，发布时必须一起更新 HTML、全部 `assets/` 分包和 `pdfjs/` 资源。
+
 ---
 
 ## 首次启动
@@ -109,7 +112,7 @@ curl --fail http://127.0.0.1:17080/knowledge-accumulation/contract/api/health
 
 ## 访问地址与网络
 
-以下均为默认映射；后端源码直接运行的端口是 20000，Compose 的宿主机后端端口是 17000。
+以下均为生产 Compose 的默认映射：后端容器监听 20000，宿主机映射为 17000。直接运行后端 `app/main.py` 则监听 17000 并使用 `/dev` API 前缀，应与 Vite 开发服务器配对，不能直接接入生产前端 Nginx。
 
 | 入口 | 宿主机地址 | 容器内地址 |
 | --- | --- | --- |
@@ -252,13 +255,54 @@ A2A 复用单 worker 的模型额度和正式合同资源，按用户本平台�
 
 主分支不再准备或挂载 user.yaml；REVIEWER_USER_FILE 和 AUTH_LOGIN_CODE_TTL_SECONDS 已移除。用户须在统一登录平台登录，由中间件保存有效登录，并加入当前平台管理员集合。无效用户返回401，非本平台管理员返回403，中间件或平台会话未就绪返回503，不回退到旧用户文件。
 
-前端应移除本地密钥登录流程，改用统一入口传入的用户 token；资源请求与 SSE 同样携带 Bearer。用户登录查询会续期，SSE 只在连接建立时认证，心跳消息不会给用户续期。
+前端已使用统一入口保存在同源 `localStorage.access_token` 中的用户 token；资源请求与 SSE 同样携带 Bearer。用户登录查询会续期，SSE 只在连接建立时认证，心跳消息不会给用户续期。
 
 会话和任务按稳定 userid 隔离，换 token 或改用户名不改变新数据归属。旧密钥会话保留但未自动认领，需可信映射才能恢复；旧删除审核未知 userid 时也不按同名用户开放。升级前应备份 SQLite，详情以当前后端的用户身份迁移文档为准。
 
 后端仍为单 worker，不启用热重载。更新源码后重新构建后端，更新环境后重新创建容器；重启不主动清空中间件登录，但会释放尚未持久化的内存运行。
 
 ---
+
+## 前端更新与回滚
+
+前端源码、Dockerfile、`config/` 和依赖锁文件应来自同一提交。发布前记录前端与 deploy 提交号，检查 `FRONTEND_SOURCE` 指向已更新的源码。仅更新前端时使用以下流程，前提是后端已经健康运行；构建失败时停止发布，现有前端容器仍可继续服务。
+
+在 deploy 目录记录当前前端容器的镜像引用和镜像 ID，并为旧镜像添加本次发布专用的回滚标签。以下变量需在同一终端保留；同时将值保存到发布记录，避免关闭终端后丢失：
+
+```bash
+frontend_container=$(docker compose ps -q frontend)
+test -n "$frontend_container"
+frontend_image=$(docker inspect --format '{{.Config.Image}}' "$frontend_container")
+frontend_previous_image=$(docker inspect --format '{{.Image}}' "$frontend_container")
+frontend_rollback_tag="contract-service-fe:rollback-$(date +%Y%m%d%H%M%S)"
+docker image tag "$frontend_previous_image" "$frontend_rollback_tag"
+```
+
+确认上述步骤成功后构建并更新前端：
+
+```bash
+docker compose config --quiet
+docker compose build frontend
+docker compose up -d --no-deps --wait frontend
+docker compose exec frontend nginx -t
+docker compose ps frontend
+curl --fail http://127.0.0.1:17080/healthz
+curl --fail http://127.0.0.1:17080/knowledge-accumulation/contract/api/health
+```
+
+地址按实际监听配置调整。`--no-deps` 仅重建前端，不更新后端或数据库；`/healthz` 只验证 Nginx，API 健康也不代替登录和业务验收。通过统一入口登录后，检查三个页面的首次切换、返回时状态保留和直接刷新；确认浏览器请求的 JS/CSS 分包、PDF Worker 与 PDF.js 资源返回正确内容，缺失资源返回 404，API 不回退为 HTML，上传及 SSE 正常。
+
+HTML 与分包必须来自同一版镜像，外层网关应保留前端缓存策略。已经打开的旧页面可能仍请求旧版哈希分包；当前镜像不保留历史版本资源，发布后应提示用户先保存或完成未提交操作，再刷新页面。刷新会释放页面内草稿和排队消息，不能以强制刷新替代保存。
+
+若新前端验证失败，在同一发布终端恢复旧镜像标签并重新创建前端；不要在回滚时执行构建：
+
+```bash
+docker image tag "$frontend_rollback_tag" "$frontend_image"
+docker compose up -d --no-deps --force-recreate --wait frontend
+docker compose exec frontend nginx -t
+```
+
+此流程适用于当前由 Compose 本地构建前端、且发布期间镜像名称及运行配置未改变的情况；恢复后重新检查页面与 API。首次部署没有旧前端镜像可回滚，按[首次启动](#首次启动)执行。
 
 ## 排查与提交
 
@@ -301,7 +345,7 @@ docker compose config --quiet
 docker compose up -d --build --wait neo4j
 ```
 
-宿主机开发和整套容器部署共用主 Compose，无需额外覆盖文件。按默认配置，浏览器访问 `http://127.0.0.1:7474`，本机后端连接 `bolt://127.0.0.1:7687`，认证方式选择 No authentication。容器后端仍连接 `bolt://neo4j:7687`，不受宿主机映射端口变化影响。
+上述命令使用生产主 Compose。本机 IDE 开发使用独立的 `docker-compose.dev.yml`，入口见[本机开发基础设施](../dev-infra/README.md)；两套配置拥有独立项目名和数据卷，但默认 Neo4j 宿主机端口相同，不能同时占用。按默认配置，浏览器访问 `http://127.0.0.1:7474`，本机后端连接 `bolt://127.0.0.1:7687`，认证方式选择 No authentication。容器后端仍连接 `bolt://neo4j:7687`，不受宿主机映射端口变化影响。
 
 上述命令只选择 `neo4j`，不会启动或重建 ES、前后端。修改监听地址或端口后，重新执行 `docker compose up -d neo4j` 应用配置；无需删除数据卷。
 
