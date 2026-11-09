@@ -14,6 +14,7 @@
 - [中间件与合同审核](#中间件与合同审核)
 - [模型与工具配置](#模型与工具配置)
 - [用户认证与更新](#用户认证与更新)
+- [后端更新与验收](#后端更新与验收)
 - [前端更新与回滚](#前端更新与回滚)
 - [排查与提交](#排查与提交)
 - [Neo4j 部署与本地开发](#neo4j-部署与本地开发)
@@ -234,6 +235,8 @@ MIDDLEWARE_SECRET=replace-with-platform-secret
 
 独立思考 FIFO 及 `VLLM_MLLM_REASONING_WINDOW_ROUNDS` 已移除，旧 `.env` 中的同名键应删除。已接受消息的完整原生思考随任务备份和恢复，旧库在初始化时事务迁移可定位的旧思考条目；升级前备份会话 SQLite，迁移失败会回滚，已被旧 FIFO 驱逐的内容无法恢复。思考仍计入完整上下文预算，不向用户 SSE 或公开历史披露。
 
+本地原生工具已将结构化业务结果与模型可见正文分离，主助手、A2A、exploration 及内部检索、整理、提取、识别和 PDF 查重工具均通过独立末尾钩子渲染反馈，可折叠资料支持可读、隐藏和不可读三态。此次反馈升级不新增环境变量、依赖或数据库迁移，保留旧 JSON 历史的读取兼容；已有会话无需重写或清库。新模块随后端 Dockerfile 的 `COPY app ./app` 打包，更新后须重新构建后端镜像。完整范围与离线验收见后端 `description/architecture/workflow/contract-communication/tool-content-contract.md`。
+
 `VLLM_MLLM_TOOL_TAG_ENABLED=false` 时不在消息上下文注入工具格式及相关纠错说明，模型部署侧仍须配置合适的工具解析和模板。Lindera 扩展路径由 Compose 固定为 `/opt/contract-service/extensions/liblindera_sqlite.so`，不能使用 macOS 原生库。私有执行链路调试默认 `COMMUNICATION_TRACE_ENABLED=false`，仅开发环境使用。
 
 Embedding 文本与图像分别使用后端源码中的统一指令，由 `app/core/embedding_prompt.py` 维护，不新增环境变量。全新部署直接使用当前指令；已有数据升级时需成套备份并重算受影响的文档向量，保证查询与存储侧编码一致，包括 SQLite 中的合同摘要、注意事项、会话检索投影，ES 中的问题与页面融合向量，以及 Neo4j 中的关系描述向量。应用启动和镜像重建不会自动完成重算；本机开发环境使用的新索引名称也不会自动同步到其他部署。具体版本与迁移边界见对应后端的 `description/capability/infrastructure/embedding-instruction-selection.md`，不要仅切换查询侧指令后继续使用旧向量。
@@ -259,9 +262,29 @@ A2A 复用单 worker 的模型额度和正式合同资源，按用户本平台�
 
 前端已使用统一入口保存在同源 `localStorage.access_token` 中的用户 token；资源请求与 SSE 同样携带 Bearer。用户登录查询会续期，SSE 只在连接建立时认证，心跳消息不会给用户续期。
 
+`GET /knowledge-accumulation/contract/api/auth/me` 透传中间件当前任职状态 `employment_status`：`employed` 为在职，`resigned` 为离职，仅作为用户资料，不改变登录有效性、平台管理员或文件权限判断。旧中间件省略该字段时，有效登录兼容为在职；有效登录显式返回 null 或非法状态按依赖故障处理。员工资料不在本平台落库，此项对齐无需数据库同步、新部署配置或本地员工状态表；契约见后端 `description/api/auth.md`。
+
 会话和任务按稳定 userid 隔离，换 token 或改用户名不改变新数据归属。旧密钥会话保留但未自动认领，需可信映射才能恢复；旧删除审核未知 userid 时也不按同名用户开放。升级前应备份 SQLite，详情以当前后端的用户身份迁移文档为准。
 
 后端仍为单 worker，不启用热重载。更新源码后重新构建后端，更新环境后重新创建容器；重启不主动清空中间件登录，但会释放尚未持久化的内存运行。
+
+---
+
+## 后端更新与验收
+
+2026-11-09 的任职状态与工具反馈升级对应后端提交 [`82f24ed`](https://github.com/caicai-6666/contract-service-be/commit/82f24ed)。本次 deploy 仅同步升级与验收说明，Compose 和环境模板继续沿用现有配置。
+
+更新前记录后端和 deploy 的提交号、当前后端镜像 ID，并按[数据与初始化](#数据与初始化)备份。确认 `BACKEND_SOURCE` 指向已更新的源码，避开尚未持久化任务的执行时段；A2A 内存响应链也会随容器重建释放。以下发布命令在部署机执行，前提是现有 ES 和 Neo4j 已健康运行：
+
+```bash
+docker compose config --quiet
+docker compose build backend
+docker compose up -d --no-deps --force-recreate --wait backend
+docker compose logs --tail=100 backend
+curl --fail http://127.0.0.1:17000/knowledge-accumulation/contract/api/health
+```
+
+构建失败时停止更新，不执行后续重建命令。地址按实际配置调整，`--no-deps` 只更新后端；首次部署按[首次启动](#首次启动)准备全部服务。容器健康后，通过统一入口使用有效管理员身份检查 `/auth/me` 的部门和任职状态，再验证合同问答工具、附件读取与 SSE；启用 A2A 时另测跨平台简单问答、文件权限过滤和最终回复。健康检查不覆盖模型、中间件和这些业务链路，离线工具契约测试通过也不能替代部署后的联调。
 
 ---
 
