@@ -329,6 +329,14 @@ docker compose exec frontend nginx -t
 
 此流程适用于当前由 Compose 本地构建前端、且发布期间镜像名称及运行配置未改变的情况；恢复后重新检查页面与 API。首次部署没有旧前端镜像可回滚，按[首次启动](#首次启动)执行。
 
+## 附件转换依赖
+
+管理员 exploration 支持 PDF、Office 和单帧图片附件；非 PDF 先转成 PDF 再进入既有业务门禁，合同提取与 A2A 上传边界不变。后端 Dockerfile 安装 LibreOffice Writer/Calc/Impress、fontconfig 和 Python 解码依赖，打包 Noto Sans CJK SC 字体及许可证，无需新增服务、端口或数据卷。
+
+`.env.example` 的 `OFFICE_CONVERTER_EXECUTABLE` 留空即可自动查找容器内转换器，通过现有 `backend.env_file` 注入；自定义时必须填写容器内路径，不能填写宿主机 LibreOffice 路径。升级需执行 `docker compose build backend`，再执行 `docker compose up -d --no-deps --force-recreate backend`。这会中断后端内存任务，应在维护窗口操作。
+
+部署后验证 Office、单帧图片上传与 PDF 阅读；转换失败返回 422，依赖缺失、繁忙或超时返回 503，大小超限返回 413。详细限额和格式见后端[附件转换说明](../contract-service-be/description/capability/document/attachment-conversion.md)（使用默认内嵌源码布局时请按 BACKEND_SOURCE 定位）。本次配置同步不代表镜像已构建或服务已更新。
+
 ## 排查与提交
 
 ```bash
@@ -352,7 +360,7 @@ docker compose config --quiet
 
 提交部署仓库时只提交环境模板、Compose、ES/Neo4j Dockerfile 和本文档；前后端 Dockerfile 分别随各自项目提交。不要提交 `.env`、`user.yaml`、源码副本或备份。不要将 `docker compose config` 完整输出粘贴到工单：它会展开模型密钥。检查语法使用 `--quiet`。
 
-后端仓库只分发部署必需源码、配置与模型资源、描述文档和必要目录占位，`scripts/`、`tests/`、`experiment/` 不随克隆提供；Compose 和镜像构建不依赖这些本地目录。Git 白名单只约束源码交付，不改变当前数据卷挂载或运行时自动创建目录的行为。
+后端仓库只分发部署必需源码、配置与模型资源、描述文档和必要目录占位，`scripts/`、`experiment/` 及大部分 `tests/` 不随克隆提供；附件转换合成样本与指定回归测试按后端白名单交付；Compose 和镜像构建不依赖这些本地目录。Git 白名单只约束源码交付，不改变当前数据卷挂载或运行时自动创建目录的行为。
 
 
 ---
